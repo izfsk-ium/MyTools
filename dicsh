@@ -1,0 +1,192 @@
+#include <locale.h>
+#include <pwd.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+
+#include <curl/curl.h>
+
+#include "types.h"
+
+/* commands */
+
+int cmd_echo(char *arg) {
+  printf("%s\n", arg);
+  return 0;
+}
+
+static Command commands[] = {{"echo", cmd_echo},
+                             {(char *)NULL, (rl_icpfunc_t *)NULL}};
+
+/* help fuctions */
+IdentityFile get_firstrun_identity_fp() {
+  IdentityFile result;
+  const char *homedir;
+
+  if ((homedir = getenv("HOME")) == NULL) {
+    homedir = getpwuid(getuid())->pw_dir;
+  }
+
+  if (homedir == NULL) {
+    result.exists = 0;
+    result.identify_file_location = NULL;
+  }
+
+  char *path = (char *)malloc(strlen(homedir) + 16);
+  sprintf(path, "%s/%s", homedir, ".transhell");
+  result.identify_file_location = path;
+
+  result.exists = (access(path, F_OK) == 0);
+  return result;
+}
+
+size_t blackhole(void *ptr, size_t size, size_t nmemb, char *data) {
+  return size * nmemb;
+}
+
+int check_dict_api() {
+  printf("Trying dictionaryapi.dev...\n");
+  CURL *request = curl_easy_init();
+  curl_easy_setopt(request, CURLOPT_URL, "https://dictionaryapi.dev");
+  curl_easy_setopt(request, CURLOPT_NOPROGRESS, 1L);
+  curl_easy_setopt(request, CURLOPT_USERAGENT, USER_AGENT);
+  curl_easy_setopt(request, CURLOPT_TCP_KEEPALIVE, 1L);
+  curl_easy_setopt(request, CURLOPT_TIMEOUT, 5L);
+  curl_easy_setopt(request, CURLOPT_WRITEFUNCTION, blackhole);
+
+  curl_easy_perform(request);
+  curl_easy_cleanup(request);
+
+  long response_code = 0;
+  double elapsed = 0.00;
+  curl_easy_getinfo(request, CURLINFO_RESPONSE_CODE, &response_code);
+  curl_easy_getinfo(request, CURLINFO_TOTAL_TIME, &elapsed);
+
+  printf("Test result : %ld in %f seconds.\n",
+         response_code == 0 ? -1 : response_code, elapsed);
+  return response_code;
+}
+
+void check_first_run() {
+  IdentityFile identity_file = get_firstrun_identity_fp();
+
+  if (identity_file.exists == 0) {
+    /* not exist, treat as first run. */
+    if (check_dict_api() <= 0) {
+      fprintf(stderr, "network error.\n");
+      curl_global_cleanup();
+      exit(1);
+    } else {
+      FILE *fp = fopen(identity_file.identify_file_location, "w");
+      fputc('1', fp);
+      fflush(fp);
+      fclose(fp);
+    }
+  }
+}
+
+/* for gnu readline */
+
+char *command_geneator(const char *text, int state) {
+  static int list_index = 0, len = 0;
+  char *name = NULL;
+
+  if (!state) {
+    list_index = 0;
+    len = strlen(text);
+  }
+
+  while (name = (commands[list_index].name)) {
+    list_index++;
+
+    if (strncmp(name, text, len) == 0)
+      return (strdup(name));
+  }
+
+  return ((char *)NULL);
+}
+
+char **compfunc(const char *text, int start, int end) {
+  char **matches = NULL;
+  return start == 0 ? rl_completion_matches(text, command_geneator)
+                    : (char **)NULL;
+}
+
+static void inline initialize() {
+  setlocale(LC_ALL, "C");
+  rl_readline_name = PROGRAM_NAME;
+  rl_attempted_completion_function = compfunc;
+  curl_global_init(CURL_GLOBAL_DEFAULT);
+  check_first_run();
+}
+
+char *strip(char *src) {
+  if (src == NULL)
+    return src;
+  char *s;
+  for (s = src; whitespace(*s); s++)
+    ;
+  if (*s == 0)
+    return s;
+  char *t = s + strlen(s) - 1;
+  while (t > s && whitespace(*t))
+    t--;
+  *++t = '\0';
+
+  return s;
+}
+
+Command *find_command(const char *name) {
+  register int i;
+
+  for (i = 0; commands[i].name; i++)
+    if (strcmp(name, commands[i].name) == 0)
+      return (&commands[i]);
+
+  return ((Command *)NULL);
+}
+
+int main(int argc, char **argv) {
+  initialize();
+
+  char *line = NULL, *prompt = (char *)malloc(64);
+  unsigned int number = 1;
+
+  while (1) {
+    memset(prompt, 0, 64);
+    snprintf(prompt, 64, "[%d] " PROGRAM_NAME " : ", number);
+    line = strip(readline(prompt));
+    if (!line) {
+      printf("Quit.");
+      break;
+    }
+
+    if (*line) {
+      add_history(line);
+      number += 1;
+
+      int i = 0;
+      char *word;
+      while (line[i] && whitespace(line[i]))
+        i++;
+      word = line + i;
+
+      while (line[i] && !whitespace(line[i]))
+        i++;
+
+      if (line[i])
+        line[i++] = '\0';
+
+      Command *command = find_command(line);
+      if (command == NULL) {
+        printf("Command not found.\n");
+      } else {
+        while (whitespace(line[i]))
+          i++;
+        word = line + i;
+        (*(command->func))(word);
+      }
+    }
+  }
+}
