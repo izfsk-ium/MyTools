@@ -1,0 +1,81 @@
+#!/usr/bin/python3
+
+# Import modules for CGI handling
+import cgi, cgitb
+import json
+import requests
+import datetime
+import hashlib
+
+from os.path import join
+
+cgitb.enable()
+
+# Create instance of FieldStorage
+form = cgi.FieldStorage()
+
+
+def die(msg):
+    print("Content-type:text/json\r\n\r\n")
+    print(json.dumps({"status": msg, "result": ""}))
+    exit(1)
+
+
+def get_filename(cd):
+    try:
+        return cd.headers["Content-disposition"].split("=", -1)[-1]
+    except Exception as e:
+        # TODO: determine filename from some where
+        return "unknown_filename"
+
+
+# Get data from fields
+url = form.getvalue("url")
+ua = form.getvalue("ua")
+method = form.getvalue("method")
+tls_err_ignore = form.getvalue("tls_err_ignore")
+redirect_follow = form.getvalue("redirect_follow")
+key = form.getvalue("key")
+
+result = {"status": "OK", "result": ""}
+
+if (
+    hashlib.sha512("1145141919810-2003ub313".encode()).hexdigest()
+    != hashlib.sha512(key.encode()).hexdigest()
+):
+    die("Bad key.")
+
+if method not in ["get", "post"]:
+    die("Bad method " + method)
+try:
+    func = getattr(requests, "get" if method == "get" else "post")
+
+    resp = func(
+        url=url,
+        headers={"User-Agent": ua},
+        verify=False if tls_err_ignore == "true" else True,
+        allow_redirects=False if redirect_follow == "false" else True,
+        stream=True,
+    )
+    resp.raise_for_status()
+
+    save_name = f"{datetime.datetime.now().timestamp()}_{get_filename(resp)}"
+
+    with open(
+        join("/home/izfsk/public_html/weget/", save_name),
+        "wb",
+    ) as fp:
+        for block in resp.iter_content(1024):
+            fp.write(block)
+        fp.flush()
+        fp.close()
+except Exception as e:
+    die(e.__repr__())
+
+
+print("Content-type:text/json\r\n\r\n")
+print(
+    json.dumps(
+        {"status": "OK", "result": f"https://izfsk.top/~izfsk/weget/{save_name}"}
+    )
+)
