@@ -95,5 +95,8 @@ def main():
         [print(' -[%5s]%s' % (i['status'], i['name']))
          for i in get_real_task(real_subject_task_url)]
 
-
-main()
+if __name__ == "__main__":
+    try:
+        main()
+    except Exception as e:
+        print(e.__str__())
